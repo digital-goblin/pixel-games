@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+.vite/
+
+# Capacitor native projects (generated on your Mac with `npx cap add ios`)
+/ios/
+/android/
