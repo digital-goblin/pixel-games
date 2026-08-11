@@ -203,6 +203,34 @@ function drawDragon(ctx: Ctx, ox: number, oy: number, px: number) {
   rect(ctx, ox, oy, px, 10, 4, 1, 1, d); // horn
 }
 
+// ---------------- Egg + boss crown ----------------
+
+// A speckled egg, tinted by its rarity accent. Used on the Pets screen.
+export function drawEgg(ctx: Ctx, ox: number, oy: number, px: number, accent: string) {
+  const shell = accent;
+  const dark = "rgba(0,0,0,0.25)";
+  rect(ctx, ox, oy, px, 6, 2, 4, 1, shell);
+  rect(ctx, ox, oy, px, 5, 3, 6, 2, shell);
+  rect(ctx, ox, oy, px, 4, 5, 8, 6, shell);
+  rect(ctx, ox, oy, px, 5, 11, 6, 1, shell);
+  rect(ctx, ox, oy, px, 4, 7, 8, 1, dark); // band
+  rect(ctx, ox, oy, px, 6, 4, 1, 1, "rgba(255,255,255,0.6)"); // shine
+  rect(ctx, ox, oy, px, 6, 8, 1, 1, dark); // speckles
+  rect(ctx, ox, oy, px, 9, 6, 1, 1, dark);
+  rect(ctx, ox, oy, px, 8, 9, 1, 1, dark);
+}
+
+// A little gold crown to mark a boss above its sprite.
+export function drawCrown(ctx: Ctx, ox: number, oy: number, px: number) {
+  const g = "#ffcc4d";
+  rect(ctx, ox, oy, px, 4, 3, 8, 2, g);
+  rect(ctx, ox, oy, px, 4, 1, 1, 2, g);
+  rect(ctx, ox, oy, px, 7, 0, 2, 3, g);
+  rect(ctx, ox, oy, px, 11, 1, 1, 2, g);
+  rect(ctx, ox, oy, px, 6, 3, 1, 1, "#ff5d6c");
+  rect(ctx, ox, oy, px, 9, 3, 1, 1, "#6de0ff");
+}
+
 // ---------------- Scene background ----------------
 
 const ZONE_SKY = ["#1a2a4a", "#241a3a", "#2a1a2a", "#1a1a24", "#2a1f14", "#141a24", "#241a14", "#2a1420"];

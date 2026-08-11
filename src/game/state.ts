@@ -1,9 +1,10 @@
 import type { GameState, ScalingStat } from "./types";
 import { CLASS_BY_ID } from "../data/classes";
 import { makeStack } from "../systems/loot";
+import { newEgg } from "../systems/pets";
 import { energyMaxFor } from "./engine";
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 const STARTER_WEAPON: Record<ScalingStat, string> = {
   str: "w_rusty_sword",
@@ -36,6 +37,9 @@ export function newGame(classId: string, now: number): GameState {
       },
     },
     bag: [makeStack("c_minor_potion", "common", 2)],
+    pets: [],
+    activePetUid: null,
+    egg: newEgg(),
     zone: 1,
     kills: 0,
     bestZone: 1,

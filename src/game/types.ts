@@ -103,6 +103,11 @@ export interface GameState {
   hero: Hero;
   bag: ItemStack[];
 
+  // companions
+  pets: PetStack[];
+  activePetUid: string | null;
+  egg: EggState | null;
+
   // progression
   zone: number; // current adventure zone index
   kills: number;
@@ -114,6 +119,40 @@ export interface GameState {
   settings: {
     sfx: boolean;
   };
+}
+
+// ---------- Companions / pets ----------
+
+// Passive bonuses a companion contributes while active.
+export interface PetBonus {
+  atkPct: number; // +% attack
+  defPct: number; // +% defense
+  critAdd: number; // +crit chance (absolute, 0..1)
+  luckAdd: number; // +luck (loot)
+  goldPct: number; // +% gold from kills
+}
+
+export interface PetSpecies {
+  id: string;
+  name: string;
+  sprite: string; // reuses an enemy sprite key in sprites.ts
+  desc: string;
+  base: Partial<PetBonus>; // bonus at common rarity, scaled by rarity
+  eggWeight: number; // how often this species rolls from an egg
+}
+
+export interface PetStack {
+  uid: string;
+  speciesId: string;
+  rarity: Rarity;
+}
+
+// An egg that incubates from real-world steps and hatches into a PetStack.
+export interface EggState {
+  speciesId: string;
+  rarity: Rarity;
+  stepsRequired: number;
+  stepsDone: number;
 }
 
 // Fully-derived combat stats after class + level + equipment.

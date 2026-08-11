@@ -10,8 +10,9 @@ from **Apple Health**. ~90% of the game is platform-agnostic; only the step
 _source_ changes between web (simulated) and iOS (HealthKit).
 
 > Status: **playable vertical slice.** Classes, weapons/armor/accessories,
-> loot rarity, equipment, an idle auto-battle loop, zones, offline progression,
-> and saving all work today. See the roadmap for what's next.
+> loot rarity, equipment, an idle auto-battle loop, zones, **bosses**,
+> **step-hatched pet companions**, offline progression, and saving all work
+> today. See the roadmap for what's next.
 
 ---
 
@@ -126,11 +127,12 @@ the browser.
 
 Content scales cheaply because it's data-driven; systems are the bigger lifts.
 
+- [x] **Pets/companions** — the SideQuest hook: eggs hatch from real steps into
+      companions with combat bonuses (`systems/pets.ts`, Pets tab)
+- [x] **Bosses** at each zone's end with guaranteed elevated loot, gems, and eggs
 - [ ] **Real HealthKit source** (native) + background step sync
 - [ ] **Skill trees / abilities** per class; active skills in combat
 - [ ] **Crafting & upgrades** (materials already drop — spend them)
-- [ ] **Bosses** at zone milestones with guaranteed loot
-- [ ] **Pets/companions** (the SideQuest hook — hatch by walking)
 - [ ] **Prestige / ascension** loop for long-term idle depth
 - [ ] **Daily step goals & streaks**, quests, achievements
 - [ ] **Guilds / leaderboards** (needs a backend)

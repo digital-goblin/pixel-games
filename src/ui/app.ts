@@ -1,11 +1,13 @@
 import "../style.css";
-import type { EquipSlot, GameState, ItemStack } from "../game/types";
+import type { EquipSlot, GameState, ItemStack, PetStack } from "../game/types";
 import { CLASSES, CLASS_BY_ID } from "../data/classes";
 import { itemDef } from "../data/items";
 import { RARITIES } from "../data/rarities";
 import { zoneName } from "../data/enemies";
+import { petSpecies } from "../data/pets";
 import { deriveStats } from "../systems/equipment";
 import { xpToNext } from "../systems/leveling";
+import { activePet, petBonusLabel } from "../systems/pets";
 import { SimulatedStepSource } from "../systems/steps";
 import {
   ENCOUNTER_COST,
@@ -13,14 +15,18 @@ import {
   KILLS_PER_ZONE,
   addEnergy,
   heroName,
+  isBossNext,
   offlineProgress,
   runEncounter,
   syncSteps,
   type EncounterOutcome,
+  type StepSync,
 } from "../game/engine";
 import { hasSave, loadGame, saveGame, wipeSave } from "../game/save";
 import { newGame } from "../game/state";
 import {
+  drawCrown,
+  drawEgg,
   drawEnemy,
   drawHero,
   drawItemIcon,
@@ -28,7 +34,7 @@ import {
   pixelate,
 } from "./sprites";
 
-type Tab = "adventure" | "hero" | "bag";
+type Tab = "adventure" | "hero" | "pets" | "bag";
 
 const now = () => Date.now();
 
@@ -59,6 +65,7 @@ export class App {
   private log: { text: string; cls: string }[] = [];
   private currentEnemy: string | null = null;
   private currentEnemyName = "";
+  private currentIsBoss = false;
   private acc = 0;
   private lastFrame = 0;
   private lastSave = 0;
@@ -137,6 +144,7 @@ export class App {
     if (summary.encounters > 0) {
       const parts = [`${summary.wins} wins`];
       if (summary.gold) parts.push(`+${fmt(summary.gold)}g`);
+      if (summary.gems) parts.push(`+${fmt(summary.gems)}✦`);
       if (summary.xp) parts.push(`+${fmt(summary.xp)}xp`);
       if (summary.levels) parts.push(`+${summary.levels} lvl`);
       if (summary.drops.length) parts.push(`${summary.drops.length} items`);
@@ -166,6 +174,7 @@ export class App {
       <div class="tabbar">
         <button data-tab="adventure"><span class="ico">⚔️</span>Adventure</button>
         <button data-tab="hero"><span class="ico">🛡️</span>Hero</button>
+        <button data-tab="pets"><span class="ico">🥚</span>Pets</button>
         <button data-tab="bag"><span class="ico">🎒</span>Bag</button>
       </div>`;
     this.root.querySelectorAll<HTMLButtonElement>(".tabbar button").forEach((b) => {
@@ -196,7 +205,7 @@ export class App {
     if (this.acc >= ENCOUNTER_MS) {
       this.acc = 0;
       // fold in any simulated steps before fighting
-      syncSteps(s, this.source, now());
+      syncSteps(s, this.source, now()).then((r) => this.applyStepSync(r));
       const out = runEncounter(s, true);
       if (out) this.onEncounter(out);
       this.refreshHud();
@@ -216,20 +225,39 @@ export class App {
   private onEncounter(out: EncounterOutcome) {
     this.currentEnemy = out.enemy.color;
     this.currentEnemyName = out.enemy.name;
+    this.currentIsBoss = out.isBoss;
     this.attackFlash = performance.now();
+    if (out.isBoss) this.pushLog(`⚔ BOSS: ${out.enemy.name}!`, "crit");
     for (const line of out.log) this.pushLog(line.text, line.cls);
     if (out.win) {
       const rewards: string[] = [];
       if (out.gold) rewards.push(`+${out.gold}g`);
+      if (out.gems) rewards.push(`+${out.gems}✦`);
       if (out.xp) rewards.push(`+${out.xp}xp`);
       this.pushLog(`  → ${rewards.join("  ")}`, "win");
       for (const d of out.drops) {
         const def = itemDef(d.defId);
         this.pushLog(`  ★ ${RARITIES[d.rarity].label} ${def.name}!`, "loot");
       }
+      if (out.eggDropped) {
+        this.pushLog(`  🥚 A mystery egg! Walk to hatch it.`, "loot");
+        this.toast("Boss dropped an egg! Check the Pets tab.");
+      }
       if (out.levels > 0) this.toast(`Level up! Now level ${this.state!.hero.level}`);
       if (out.zoneAdvanced) this.toast(`Zone cleared → ${zoneName(this.state!.zone)}`);
     }
+  }
+
+  // Handle the result of a step sync (energy already applied in engine).
+  private applyStepSync(r: StepSync) {
+    if (r.hatched) this.onHatch(r.hatched);
+    if (r.steps > 0 && this.tab === "pets") this.renderTab();
+  }
+
+  private onHatch(pet: PetStack) {
+    const sp = petSpecies(pet.speciesId);
+    this.toast(`🥚 Hatched a ${RARITIES[pet.rarity].label} ${sp.name}!`);
+    this.pushLog(`  🐣 ${RARITIES[pet.rarity].label} ${sp.name} hatched!`, "loot");
   }
 
   private pushLog(text: string, cls: string) {
@@ -265,6 +293,7 @@ export class App {
     if (!screen) return;
     if (this.tab === "adventure") this.renderAdventure(screen);
     else if (this.tab === "hero") this.renderHero(screen);
+    else if (this.tab === "pets") this.renderPets(screen);
     else this.renderBag(screen);
   }
 
@@ -273,7 +302,11 @@ export class App {
     screen.innerHTML = `
       <div class="row-between" style="margin-bottom:8px">
         <div><span class="tag">ZONE ${s.zone}</span> ${zoneName(s.zone)}</div>
-        <div class="muted">${s.kills % KILLS_PER_ZONE}/${KILLS_PER_ZONE} to next</div>
+        <div class="muted">${
+          isBossNext(s)
+            ? `<span style="color:var(--accent)">⚔ BOSS next</span>`
+            : `${s.kills % KILLS_PER_ZONE}/${KILLS_PER_ZONE} to boss`
+        }</div>
       </div>
       <div class="scene-wrap">
         <canvas id="scene" width="200" height="112"></canvas>
@@ -292,15 +325,20 @@ export class App {
           <button id="walk1000">🏃 +1,000</button>
           <button id="walk5000">⚡ +5,000</button>
         </div>
+        <div class="statline" style="margin-top:10px"><span>🥚 EGG</span>
+          <div class="bar"><div class="fill xp" id="eggFill"></div><div class="label" id="eggLbl"></div></div>
+        </div>
         <div class="muted" style="margin-top:8px">Lifetime steps: <span id="lifeSteps">0</span></div>
       </div>`;
     const bind = (id: string, n: number) =>
       screen.querySelector<HTMLButtonElement>(`#${id}`)!.addEventListener("click", () => {
         this.source.addManual(n);
-        syncSteps(s, this.source, now()).then(() => {
+        syncSteps(s, this.source, now()).then((r) => {
           this.refreshHud();
           this.updateSceneHud();
-          this.toast(`+${fmt(n)} steps → energy`);
+          this.updateEggBar();
+          if (r.hatched) this.onHatch(r.hatched);
+          else this.toast(`+${fmt(n)} steps → energy`);
         });
       });
     bind("walk250", 250);
@@ -308,6 +346,22 @@ export class App {
     bind("walk5000", 5000);
     this.pushLog("Expedition begins...", "hit");
     this.updateSceneHud();
+    this.updateEggBar();
+  }
+
+  private updateEggBar() {
+    const s = this.state!;
+    const fill = this.root.querySelector<HTMLElement>("#eggFill");
+    const lbl = this.root.querySelector<HTMLElement>("#eggLbl");
+    if (!fill || !lbl) return;
+    if (!s.egg) {
+      fill.style.width = "0%";
+      lbl.textContent = "no egg";
+      return;
+    }
+    const pct = Math.min(100, (s.egg.stepsDone / s.egg.stepsRequired) * 100);
+    fill.style.width = `${pct}%`;
+    lbl.textContent = `${fmt(s.egg.stepsDone)} / ${fmt(s.egg.stepsRequired)} steps`;
   }
 
   private updateSceneHud() {
@@ -340,7 +394,10 @@ export class App {
     // enemy (only when actively fighting)
     if (s.energy >= ENCOUNTER_COST && this.currentEnemy) {
       const ebob = Math.sin(t / 260 + 1) * 1.5;
-      drawEnemy(ctx, 116 - lunge, groundY + ebob, 3, this.currentEnemy);
+      const scale = this.currentIsBoss ? 4 : 3;
+      const ex = this.currentIsBoss ? 108 - lunge : 116 - lunge;
+      drawEnemy(ctx, ex, groundY + ebob - (this.currentIsBoss ? 16 : 0), scale, this.currentEnemy);
+      if (this.currentIsBoss) drawCrown(ctx, ex + 12, groundY + ebob - 32, 3);
     } else if (s.energy < ENCOUNTER_COST) {
       ctx.fillStyle = "rgba(255,255,255,0.6)";
       ctx.font = "8px monospace";
@@ -369,6 +426,7 @@ export class App {
           <div class="label">${fmt(s.hero.xp)} / ${fmt(xpNext)}</div></div>
         </div>
         <div class="muted" style="margin-top:8px">${cls.passive}</div>
+        ${this.companionLine()}
       </div>
       <div class="panel">
         <h2>Combat stats</h2>
@@ -415,6 +473,80 @@ export class App {
         location.reload();
       }
     });
+  }
+
+  private companionLine(): string {
+    const pet = activePet(this.state!);
+    if (!pet) return `<div class="muted" style="margin-top:4px">No companion active — hatch an egg on the Pets tab.</div>`;
+    const sp = petSpecies(pet.speciesId);
+    return `<div class="muted" style="margin-top:4px">🐾 <span class="${rarityClass(pet.rarity)}">${sp.name}</span> — ${petBonusLabel(pet)}</div>`;
+  }
+
+  // ---------------- Pets tab ----------------
+  private renderPets(screen: HTMLElement) {
+    const s = this.state!;
+    const egg = s.egg;
+    const eggPct = egg ? Math.min(100, (egg.stepsDone / egg.stepsRequired) * 100) : 0;
+    screen.innerHTML = `
+      <div class="panel">
+        <h2>Incubating</h2>
+        <div class="row-between">
+          <canvas id="eggCanvas" width="48" height="48"></canvas>
+          <div style="flex:1;margin-left:12px">
+            <div class="iname">${egg ? "Mystery Egg" : "No egg"}</div>
+            <div class="muted" style="margin:4px 0 6px">${
+              egg ? `A <span class="${rarityClass(egg.rarity)}">${RARITIES[egg.rarity].label}</span> companion is forming. Walk to hatch it.` : "Defeat a zone boss to find an egg."
+            }</div>
+            <div class="bar"><div class="fill xp" style="width:${eggPct}%"></div>
+              <div class="label">${egg ? `${fmt(egg.stepsDone)} / ${fmt(egg.stepsRequired)} steps` : ""}</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Companions (${s.pets.length})</h2>
+        <div class="muted" style="margin-bottom:10px">Tap a companion to make it active. Its bonus applies in every battle.</div>
+        <div class="grid" id="petGrid"></div>
+      </div>`;
+
+    // draw egg
+    const ec = screen.querySelector<HTMLCanvasElement>("#eggCanvas")!;
+    const ectx = ec.getContext("2d")!;
+    pixelate(ectx);
+    const eggAccent = egg
+      ? getComputedStyle(document.documentElement).getPropertyValue(`--r-${egg.rarity}`).trim() || "#ffcc4d"
+      : "#555";
+    drawEgg(ectx, 0, 0, 3, eggAccent);
+
+    // pet collection
+    const grid = screen.querySelector<HTMLElement>("#petGrid")!;
+    if (s.pets.length === 0) {
+      grid.innerHTML = `<div class="muted">No companions yet. Keep walking — your first egg is on the way!</div>`;
+      return;
+    }
+    const order = ["legendary", "epic", "rare", "uncommon", "common"];
+    const sorted = [...s.pets].sort((a, b) => order.indexOf(a.rarity) - order.indexOf(b.rarity));
+    for (const pet of sorted) {
+      const sp = petSpecies(pet.speciesId);
+      const el = document.createElement("div");
+      el.className = "slot";
+      el.dataset.rarity = pet.rarity;
+      el.classList.toggle("selected", pet.uid === s.activePetUid);
+      const canvas = document.createElement("canvas");
+      canvas.width = 40;
+      canvas.height = 40;
+      el.appendChild(canvas);
+      const ctx = canvas.getContext("2d")!;
+      pixelate(ctx);
+      drawEnemy(ctx, 0, 2, 2.4, sp.sprite);
+      el.title = `${sp.name} — ${petBonusLabel(pet)}`;
+      el.addEventListener("click", () => {
+        s.activePetUid = pet.uid;
+        saveGame(s, now());
+        this.toast(`${sp.name} is now your companion`);
+        this.renderTab();
+      });
+      grid.appendChild(el);
+    }
   }
 
   // ---------------- Bag tab ----------------

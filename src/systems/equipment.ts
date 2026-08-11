@@ -8,6 +8,7 @@ import type {
 import { ZERO_STATS } from "../game/types";
 import { CLASS_BY_ID } from "../data/classes";
 import { itemDef } from "../data/items";
+import { activePetBonus } from "./pets";
 
 const STAT_KEYS: StatKey[] = ["str", "dex", "int", "vit", "luck"];
 
@@ -50,6 +51,10 @@ export function deriveStats(state: GameState): DerivedStats {
     if (def.stats) stats = addStats(stats, def.stats);
   }
 
+  // active companion contributes luck directly and %-modifiers below
+  const pet = activePetBonus(state);
+  stats.luck += pet.luckAdd;
+
   // 2) weapon attack
   let weaponAtk = 0;
   let scalingStat: StatKey = "str";
@@ -63,7 +68,7 @@ export function deriveStats(state: GameState): DerivedStats {
     weaponAtk = 2;
   }
   const scaling = stats[scalingStat] * 1.5;
-  const atk = Math.max(1, Math.round((weaponAtk + scaling) * mods.atk));
+  const atk = Math.max(1, Math.round((weaponAtk + scaling) * mods.atk * (1 + pet.atkPct)));
 
   // 3) defense from armor + vitality
   let armorDef = 0;
@@ -71,7 +76,7 @@ export function deriveStats(state: GameState): DerivedStats {
     const def = itemDef(stack.defId);
     if (def.def) armorDef += def.def * stack.roll;
   }
-  const defense = Math.round((armorDef + stats.vit * 0.6) * mods.def);
+  const defense = Math.round((armorDef + stats.vit * 0.6) * mods.def * (1 + pet.defPct));
 
   // 4) hp
   const maxHp = Math.round(30 + stats.vit * 9 + hero.level * 6);
@@ -79,7 +84,7 @@ export function deriveStats(state: GameState): DerivedStats {
   // 5) crit
   const critChance = Math.min(
     0.75,
-    0.05 + stats.dex * 0.004 + stats.luck * 0.005 + mods.crit,
+    0.05 + stats.dex * 0.004 + stats.luck * 0.005 + mods.crit + pet.critAdd,
   );
   const critMult = 1.5 + mods.critMult + stats.luck * 0.008;
 

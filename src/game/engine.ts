@@ -1,14 +1,17 @@
 import type {
   BattleLine,
 } from "../systems/combat";
-import type { EnemyDef, GameState, ItemStack } from "./types";
+import type { EnemyDef, GameState, ItemStack, PetStack } from "./types";
 import { deriveStats, effectiveLuck } from "../systems/equipment";
 import { estimateWin, simulateBattle } from "../systems/combat";
-import { addToBag, rollDrops } from "../systems/loot";
+import { addToBag, makeStack, rollDrops } from "../systems/loot";
 import { grantXp } from "../systems/leveling";
-import { zoneEnemies } from "../data/enemies";
+import { zoneEnemies, zoneName } from "../data/enemies";
 import { CLASS_BY_ID } from "../data/classes";
-import { pick } from "./rng";
+import { itemDef } from "../data/items";
+import { rarityWeights } from "../data/rarities";
+import { chance, pick, weighted } from "./rng";
+import { activePetBonus, bossEgg, progressEgg } from "../systems/pets";
 import { STEP_TO_ENERGY, type StepSource } from "../systems/steps";
 
 export const ENCOUNTER_COST = 10; // energy (== steps) per fight
@@ -32,13 +35,53 @@ export function heroName(state: GameState): string {
 
 export interface EncounterOutcome {
   enemy: EnemyDef;
+  isBoss: boolean;
   win: boolean;
   xp: number;
   gold: number;
+  gems: number;
   levels: number;
   drops: ItemStack[];
+  eggDropped: boolean;
   log: BattleLine[];
   zoneAdvanced: boolean;
+}
+
+// The zone-ending encounter (the KILLS_PER_ZONE-th kill) is a boss.
+export function isBossNext(state: GameState): boolean {
+  return state.kills % KILLS_PER_ZONE === KILLS_PER_ZONE - 1;
+}
+
+// Build the elite zone boss: a scaled-up version of the toughest local enemy.
+export function makeBoss(zone: number): EnemyDef {
+  const pool = zoneEnemies(zone);
+  const base = pool[pool.length - 1]; // highest tier in the zone
+  return {
+    ...base,
+    id: base.id + "_boss",
+    name: `${zoneName(zone)} Warden`,
+    hp: Math.round(base.hp * 4.2),
+    atk: Math.round(base.atk * 1.7),
+    def: Math.round(base.def * 1.5),
+    xp: Math.round(base.xp * 6),
+    gold: Math.round(base.gold * 6),
+  };
+}
+
+// Guaranteed elevated loot for a boss kill (at least one gear piece).
+function bossDrops(enemy: EnemyDef, luck: number): ItemStack[] {
+  const gear = enemy.drops.filter(([id]) => !!itemDef(id).slot);
+  const out: ItemStack[] = [];
+  for (const [id, p] of gear) {
+    if (chance(Math.min(0.9, p * 4))) {
+      out.push(makeStack(id, weighted(rarityWeights(luck + 30))));
+    }
+  }
+  if (out.length === 0 && gear.length > 0) {
+    const [id] = pick(gear);
+    out.push(makeStack(id, weighted(rarityWeights(luck + 30))));
+  }
+  return out.slice(0, 3);
 }
 
 // Resolve a single encounter in the current zone, applying all rewards to
@@ -50,8 +93,8 @@ export function runEncounter(
   if (state.energy < ENCOUNTER_COST) return null;
 
   const derived = deriveStats(state);
-  const pool = zoneEnemies(state.zone);
-  const enemy = pick(pool);
+  const boss = isBossNext(state);
+  const enemy = boss ? makeBoss(state.zone) : pick(zoneEnemies(state.zone));
   state.energy -= ENCOUNTER_COST;
 
   let win: boolean;
@@ -66,20 +109,36 @@ export function runEncounter(
 
   let xp = 0;
   let gold = 0;
+  let gems = 0;
   let levels = 0;
+  let eggDropped = false;
   const drops: ItemStack[] = [];
   let zoneAdvanced = false;
 
   if (win) {
+    const petGold = activePetBonus(state).goldPct;
     xp = enemy.xp;
-    gold = enemy.gold;
+    gold = Math.round(enemy.gold * (1 + petGold));
     state.gold += gold;
     levels = grantXp(state.hero, xp).levelsGained;
 
-    const rolled = rollDrops(enemy, effectiveLuck(state));
+    const luck = effectiveLuck(state);
+    const rolled = boss ? bossDrops(enemy, luck) : rollDrops(enemy, luck);
     for (const s of rolled) {
       addToBag(state.bag, s);
       drops.push(s);
+    }
+
+    if (boss) {
+      gems = 2 + state.zone;
+      // a boss guarantees an egg if you're not already incubating one
+      if (!state.egg) {
+        state.egg = bossEgg();
+        eggDropped = true;
+      } else {
+        gems += 2; // otherwise a little extra shiny
+      }
+      state.gems += gems;
     }
 
     state.kills += 1;
@@ -90,7 +149,7 @@ export function runEncounter(
     }
   }
 
-  return { enemy, win, xp, gold, levels, drops, log, zoneAdvanced };
+  return { enemy, isBoss: boss, win, xp, gold, gems, levels, drops, eggDropped, log, zoneAdvanced };
 }
 
 export interface OfflineSummary {
@@ -99,6 +158,7 @@ export interface OfflineSummary {
   wins: number;
   xp: number;
   gold: number;
+  gems: number;
   levels: number;
   drops: ItemStack[];
   capped: boolean;
@@ -119,12 +179,14 @@ export function offlineProgress(state: GameState, now: number): OfflineSummary {
     wins: 0,
     xp: 0,
     gold: 0,
+    gems: 0,
     levels: 0,
     drops: [],
     capped,
   };
 
   const goldBefore = state.gold;
+  const gemsBefore = state.gems;
   for (let i = 0; i < n; i++) {
     const out = runEncounter(state, false);
     if (!out) break;
@@ -137,23 +199,32 @@ export function offlineProgress(state: GameState, now: number): OfflineSummary {
     }
   }
   summary.gold = state.gold - goldBefore;
+  summary.gems = state.gems - gemsBefore;
   return summary;
 }
 
-// Reconcile a fresh step sample from the source into banked energy.
+export interface StepSync {
+  steps: number;
+  hatched: PetStack | null;
+}
+
+// Reconcile a fresh step sample from the source: steps become energy AND
+// incubate the active egg. Returns the delta and any pet that hatched.
 export async function syncSteps(
   state: GameState,
   source: StepSource,
   now: number,
-): Promise<number> {
+): Promise<StepSync> {
   const today = await source.todaySteps();
   // If the counter went backwards (new day / new source), rebase without award.
   const delta = today >= state.stepsToday ? today - state.stepsToday : 0;
   state.stepsToday = today;
+  let hatched: PetStack | null = null;
   if (delta > 0) {
     state.lifetimeSteps += delta;
     addEnergy(state, delta);
+    hatched = progressEgg(state, delta);
   }
   state.lastStepSample = now;
-  return delta;
+  return { steps: delta, hatched };
 }
